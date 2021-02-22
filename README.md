@@ -1,6 +1,6 @@
 # pjson.rs
 
-[![license](https://img.shields.io/crates/l/pjson.svg?)](LICENSE)
+[![license](https://img.shields.io/crates/l/pjson.svg)](LICENSE)
 [![crates.io](https://img.shields.io/crates/d/pjson.svg)](https://crates.io/crates/pjson)
 [![version](https://img.shields.io/crates/v/pjson.svg)](https://crates.io/crates/pjson/)
 [![documentation](https://docs.rs/pjson/badge.svg)](https://docs.rs/pjson/)
