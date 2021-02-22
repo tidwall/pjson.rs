@@ -25,12 +25,33 @@ pub const SIGN: usize = 1 << 17; // the data is a signed Number (has a '-' prefi
 pub const DOT: usize = 1 << 18; // the data is a Number has a dot (radix point)
 pub const E: usize = 1 << 19; // the data is a Number in scientific notation (has 'E' or 'e')
 
-pub fn parse<F>(json: &[u8], opts: usize, f: F) -> i64
+/// Parse JSON. The iter function is a callback that fires for every element in
+/// the JSON document. Elements include all values and tokens. The 'start' and
+/// 'end' params are the start and end indexes of their respective element,
+/// such that json[start..end] will equal the complete element data. The 'info'
+/// param provides extra information about the element data.
+///
+/// Returning 0 from 'iter' will stop the parsing.
+/// Returning 1 from 'iter' will continue the parsing.
+/// Returning -1 from 'iter' will skip all children elements in the
+/// current Object or Array, which only applies when the 'info' for current
+/// element has the Open bit set, otherwise it effectively works like
+/// returning 1.
+///
+/// This operation returns zero or a negative value if an error
+/// occured. This value represents the position that the parser was at when it
+/// discovered the error. To get the true offset multiple this value by -1.
+///
+/// This operation returns a positive value when successful. If the 'iter'
+/// stopped early then this value will be the position the parser was at when
+/// it stopped, otherwise the value will be equal the length of the original
+/// json document.
+pub fn parse<F>(json: &[u8], opts: usize, iter: F) -> i64
 where
     F: FnMut(usize, usize, usize) -> i64,
 {
     let _ = opts;
-    let mut f = f;
+    let mut f = iter;
     let (i, ok, _) = vdoc(json, 0, &mut f, false);
     if !ok {
         i as i64 * -1
@@ -393,7 +414,7 @@ fn vstring(json: &[u8], mut i: usize) -> (usize, usize, bool, bool) {
     let mut info: usize = 0;
     'outer: loop {
         'tok: loop {
-            while i+8 < json.len() {
+            while i + 8 < json.len() {
                 for _ in 0..8 {
                     // SAFETY: the call is made safe because the bounds were
                     // checked in the parent while loop condition.
@@ -490,7 +511,7 @@ fn vnumber(json: &[u8], mut i: usize) -> (usize, usize, bool, bool) {
                 return (i, info, false, true);
             }
             i += 1;
-            while i+4 < json.len() {
+            while i + 4 < json.len() {
                 for _ in 0..4 {
                     // SAFETY: the call is made safe because the bounds were
                     // checked in the parent while loop condition.
@@ -602,7 +623,6 @@ mod tests {
     use crate::*;
     use std::fs;
     use std::io::Write;
-
 
     fn frag(json: &[u8], start: usize, end: usize) -> String {
         return String::from_utf8(json[start..end].to_vec()).unwrap();
@@ -1101,10 +1121,7 @@ mod tests {
             out.push_str(&frag(json, start, end));
             return 1;
         });
-        assert_eq!(
-            String::from_utf8(ugly(&json)).unwrap(),
-            out,
-        );
+        assert_eq!(String::from_utf8(ugly(&json)).unwrap(), out,);
     }
 
     #[test]
@@ -1130,14 +1147,13 @@ mod tests {
     }
 
     fn bench_file(path: &str) {
-        let contents = fs::read_to_string(path)
-            .expect("Something went wrong reading the file");
+        let contents = fs::read_to_string(path).expect("Something went wrong reading the file");
         let json = contents.as_bytes();
         print!("running benchmark: {}: ", path);
         std::io::stdout().flush().unwrap();
         let mut total = 0;
         let start = std::time::Instant::now();
-        while total < 100*1024*1024 {
+        while total < 100 * 1024 * 1024 {
             parse(json, 0, |_: usize, _: usize, _: usize| -> i64 { -1 });
             total += json.len();
         }
@@ -1164,7 +1180,7 @@ mod tests {
 	   "#;
 
         crate::parse(json, 0, |start: usize, end: usize, info: usize| -> i64 {
-            if info&(crate::STRING|crate::VALUE) == crate::STRING|crate::VALUE {
+            if info & (crate::STRING | crate::VALUE) == crate::STRING | crate::VALUE {
                 let el = String::from_utf8(json[start..end].to_vec()).unwrap();
                 println!("{}", el);
             }
