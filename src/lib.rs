@@ -5,25 +5,44 @@
 // Bit flags passed to the "info" parameter of the iter function which
 // provides additional information about the data
 
-pub const STRING: usize = 1 << 1; // the data is a JSON String
-pub const NUMBER: usize = 1 << 2; // the data is a JSON Number
-pub const TRUE: usize = 1 << 3; // the data is a JSON True
-pub const FALSE: usize = 1 << 4; // the data is a JSON False
-pub const NULL: usize = 1 << 5; // the data is a JSON NUll
-pub const OBJECT: usize = 1 << 6; // the data is a JSON Object (open or close character)
-pub const ARRAY: usize = 1 << 7; // the data is a JSON Array (open or close character)
-pub const COMMA: usize = 1 << 8; // the data is a JSON comma character ','
-pub const COLON: usize = 1 << 9; // the data is a JSON colon character ':'
-pub const START: usize = 1 << 10; // the data is the start of the JSON document
-pub const END: usize = 1 << 11; // the data is the end of the JSON document
-pub const OPEN: usize = 1 << 12; // the data is an open character (Object or Array, '{' or '[')
-pub const CLOSE: usize = 1 << 13; // the data is an close character (Object or Array, '}' or ']')
-pub const KEY: usize = 1 << 14; // the data is a JSON Object key
-pub const VALUE: usize = 1 << 15; // the data is a JSON Object or Array value
-pub const ESCAPED: usize = 1 << 16; // the data is a String with at least one escape character ('\')
-pub const SIGN: usize = 1 << 17; // the data is a signed Number (has a '-' prefix)
-pub const DOT: usize = 1 << 18; // the data is a Number has a dot (radix point)
-pub const E: usize = 1 << 19; // the data is a Number in scientific notation (has 'E' or 'e')
+/// the data is a JSON String
+pub const STRING: usize = 1 << 1; 
+/// the data is a JSON Number
+pub const NUMBER: usize = 1 << 2; 
+/// the data is a JSON True
+pub const TRUE: usize = 1 << 3; 
+/// the data is a JSON False
+pub const FALSE: usize = 1 << 4;
+/// the data is a JSON NUll 
+pub const NULL: usize = 1 << 5; 
+/// the data is a JSON Object (open or close character)
+pub const OBJECT: usize = 1 << 6;
+/// the data is a JSON Array (open or close character) 
+pub const ARRAY: usize = 1 << 7; 
+/// the data is a JSON comma character ','
+pub const COMMA: usize = 1 << 8; 
+/// the data is a JSON colon character ':'
+pub const COLON: usize = 1 << 9; 
+/// the data is the start of the JSON document
+pub const START: usize = 1 << 10;
+/// the data is the end of the JSON document 
+pub const END: usize = 1 << 11; 
+/// the data is an open character (Object or Array, '{' or '[')
+pub const OPEN: usize = 1 << 12; 
+/// the data is an close character (Object or Array, '}' or ']')
+pub const CLOSE: usize = 1 << 13;
+/// the data is a JSON Object key
+pub const KEY: usize = 1 << 14; 
+/// the data is a JSON Object or Array value
+pub const VALUE: usize = 1 << 15; 
+/// the data is a String with at least one escape character ('\')
+pub const ESCAPED: usize = 1 << 16; 
+/// the data is a signed Number (has a '-' prefix)
+pub const SIGN: usize = 1 << 17;
+/// the data is a Number has a dot (radix point) 
+pub const DOT: usize = 1 << 18; 
+/// the data is a Number in scientific notation (has 'E' or 'e')
+pub const E: usize = 1 << 19; 
 
 /// Parse JSON. The iter function is a callback that fires for every element in
 /// the JSON document. Elements include all values and tokens. The 'start' and
@@ -46,6 +65,54 @@ pub const E: usize = 1 << 19; // the data is a Number in scientific notation (ha
 /// stopped early then this value will be the position the parser was at when
 /// it stopped, otherwise the value will be equal the length of the original
 /// json document.
+/// 
+/// The following example prints every JSON String Value in the document:
+/// 
+/// ```
+/// fn main() {
+///     let json = br#"
+///     {
+///       "name": {"first": "Tom", "last": "Anderson"},
+///       "age":37,
+///       "children": ["Sara","Alex","Jack"],
+///       "fav.movie": "Deer Hunter",
+///       "friends": [
+///     	{"first": "Dale", "last": "Murphy", "age": 44, "nets": ["ig", "fb", "tw"]},
+///     	{"first": "Roger", "last": "Craig", "age": 68, "nets": ["fb", "tw"]},
+///     	{"first": "Jane", "last": "Murphy", "age": 47, "nets": ["ig", "tw"]}
+///       ]
+///     }
+///    "#;
+///
+///    pjson::parse(json, 0, |start: usize, end: usize, info: usize| -> i64 {
+///        if info & (pjson::STRING | pjson::VALUE) == pjson::STRING | pjson::VALUE {
+///            let el = String::from_utf8(json[start..end].to_vec()).unwrap();
+///            println!("{}", el);
+///        }
+///        1
+///    });
+/// }
+/// // output:
+/// // "Tom"
+/// // "Anderson"
+/// // "Sara"
+/// // "Alex"
+/// // "Jack"
+/// // "Deer Hunter"
+/// // "Dale"
+/// // "Murphy"
+/// // "ig"
+/// // "fb"
+/// // "tw"
+/// // "Roger"
+/// // "Craig"
+/// // "fb"
+/// // "tw"
+/// // "Jane"
+/// // "Murphy"
+/// // "ig"
+/// // "tw"
+/// ```
 pub fn parse<F>(json: &[u8], opts: usize, iter: F) -> i64
 where
     F: FnMut(usize, usize, usize) -> i64,
