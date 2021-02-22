@@ -9,6 +9,8 @@ A JSON stream parser for Rust.
 
 This is a port of the [pjson](https://github.com/tidwall/pjson) Go library.
 
+It's designed to be [very fast](bench) and use zero allocations.
+
 ## Example
 
 Print all string values from a JSON document.
