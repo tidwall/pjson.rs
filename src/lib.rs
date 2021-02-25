@@ -190,12 +190,11 @@ static CHTABLE: [u8; 256] = {
     table[b'"' as usize] |= CHSTRTOK;
     table[b'\\' as usize] |= CHSTRTOK;
 
-
     table[b'"' as usize] |= CHSQUASH;
-    table[b'{' as usize] |= CHSQUASH|CHOPEN;
-    table[b'[' as usize] |= CHSQUASH|CHOPEN;
-    table[b'}' as usize] |= CHSQUASH|CHCLOSE;
-    table[b']' as usize] |= CHSQUASH|CHCLOSE;
+    table[b'{' as usize] |= CHSQUASH | CHOPEN;
+    table[b'[' as usize] |= CHSQUASH | CHOPEN;
+    table[b'}' as usize] |= CHSQUASH | CHCLOSE;
+    table[b']' as usize] |= CHSQUASH | CHCLOSE;
 
     table
 };
@@ -240,10 +239,34 @@ fn squash(json: &[u8], mut i: usize) -> usize {
     let mut ch: usize = 0;
     'outer: loop {
         'tok: loop {
+            #[cfg(all(any(target_arch = "x86_64"), target_feature = "sse2"))]
+            // SAFETY: the call is made safe because the bounds are
+            // checked in the folling while loop condition.
+            unsafe {
+                use std::arch::x86_64::*;
+                while (i + 16 < json.len()) {
+                    let mut block: __m128i;
+                    let ptr = json.get_unchecked(i) as *const _ as *const __m128i;
+                    let block = _mm_loadu_si128(ptr);
+                    let mask = 0
+                        | _mm_movemask_epi8(_mm_cmpeq_epi8(block, _mm_set1_epi8(b'"' as i8)))
+                        | _mm_movemask_epi8(_mm_cmpeq_epi8(block, _mm_set1_epi8(b'[' as i8)))
+                        | _mm_movemask_epi8(_mm_cmpeq_epi8(block, _mm_set1_epi8(b'{' as i8)))
+                        | _mm_movemask_epi8(_mm_cmpeq_epi8(block, _mm_set1_epi8(b']' as i8)))
+                        | _mm_movemask_epi8(_mm_cmpeq_epi8(block, _mm_set1_epi8(b'}' as i8)));
+                    if mask == 0 {
+                        i += 16;
+                        continue;
+                    }
+                    i += mask.trailing_zeros() as usize;
+                    ch = *json.get_unchecked(i) as usize;
+                    break 'tok;
+                }
+            }
             while i + 8 < json.len() {
                 for _ in 0..8 {
                     ch = unsafe { *json.get_unchecked(i) } as usize;
-                    if CHTABLE[ch]&CHSQUASH == CHSQUASH {
+                    if CHTABLE[ch] & CHSQUASH == CHSQUASH {
                         break 'tok;
                     }
                     i += 1;
@@ -251,7 +274,7 @@ fn squash(json: &[u8], mut i: usize) -> usize {
             }
             while i < json.len() {
                 ch = json[i] as usize;
-                if CHTABLE[ch]&CHSQUASH == CHSQUASH {    
+                if CHTABLE[ch] & CHSQUASH == CHSQUASH {
                     break 'tok;
                 }
                 i += 1;
@@ -280,26 +303,26 @@ fn squash(json: &[u8], mut i: usize) -> usize {
                     break 'outer;
                 }
                 // look for an escaped slash
-                if json[i-1] == b'\\' {
+                if json[i - 1] == b'\\' {
                     let mut n = 0;
                     let mut j = i - 2;
-                    while j > s-1  {
+                    while j > s - 1 {
                         if json[j] != b'\\' {
                             break;
                         }
                         n += 1;
                         j -= 1;
                     }
-                    if n%2 == 0 {
+                    if n % 2 == 0 {
                         i += 1;
                         continue;
                     }
                 }
                 break;
             }
-        } else if CHTABLE[ch]&CHOPEN == CHOPEN {
+        } else if CHTABLE[ch] & CHOPEN == CHOPEN {
             depth += 1;
-        } else if CHTABLE[ch]&CHCLOSE == CHCLOSE {
+        } else if CHTABLE[ch] & CHCLOSE == CHCLOSE {
             depth -= 1;
             if depth == 0 {
                 return i + 1;
@@ -348,7 +371,7 @@ where
                     oskip = true;
                 }
             }
-            if opts&UNCHECKED==UNCHECKED && oskip {
+            if opts & UNCHECKED == UNCHECKED && oskip {
                 i = squash(json, i + 1);
             } else {
                 let (i_, ok_, stop_) = vobject(json, i + 1, opts, f, oskip);
@@ -380,7 +403,7 @@ where
                     oskip = true;
                 }
             }
-            if opts&UNCHECKED==UNCHECKED && oskip {
+            if opts & UNCHECKED == UNCHECKED && oskip {
                 i = squash(json, i + 1);
             } else {
                 let (i_, ok_, stop_) = varray(json, i + 1, opts, f, oskip);
@@ -579,32 +602,61 @@ where
 fn vstring(json: &[u8], mut i: usize) -> (usize, usize, bool, bool) {
     let mut info: usize = 0;
     'outer: loop {
+        let mut ch = 0;
         'tok: loop {
+            #[cfg(all(any(target_arch = "x86_64"), target_feature = "sse2"))]
+            // SAFETY: the call is made safe because the bounds are
+            // checked in the folling while loop condition.
+            unsafe {
+                use std::arch::x86_64::*;
+                while (i + 16 < json.len()) {
+                    let mut block: __m128i;
+                    let ptr = json.get_unchecked(i) as *const _ as *const __m128i;
+                    let block = _mm_loadu_si128(ptr);
+                    let ctrl_mask =
+                        _mm_movemask_epi8(_mm_cmplt_epi8(block, _mm_set1_epi8(b' ' as i8)))
+                            & _mm_movemask_epi8(_mm_cmpgt_epi8(block, _mm_set1_epi8(-1)));
+                    let quote_mask =
+                        _mm_movemask_epi8(_mm_cmpeq_epi8(block, _mm_set1_epi8(b'"' as i8)));
+                    let slash_mask =
+                        _mm_movemask_epi8(_mm_cmpeq_epi8(block, _mm_set1_epi8(b'\\' as i8)));
+                    let mask = ctrl_mask | quote_mask | slash_mask;
+                    if mask == 0 {
+                        i += 16;
+                        continue;
+                    }
+                    i += mask.trailing_zeros() as usize;
+                    ch = *json.get_unchecked(i);
+                    break 'tok;
+                }
+            }
             while i + 8 < json.len() {
                 for _ in 0..8 {
                     // SAFETY: the call is made safe because the bounds were
                     // checked in the parent while loop condition.
-                    if isstrtok(unsafe { *json.get_unchecked(i) }) {
+                    ch = unsafe { *json.get_unchecked(i) };
+                    if isstrtok(ch) {
                         break 'tok;
                     }
                     i += 1;
                 }
             }
             while i < json.len() {
-                if isstrtok(json[i]) {
+                ch = json[i];
+                if isstrtok(ch) {
                     break 'tok;
                 }
                 i += 1;
             }
             break 'outer;
         }
-        if json[i] == b'"' {
+        if ch == b'"' {
             return (i + 1, info, true, false);
         }
-        if json[i] < b' ' {
+        if ch < b' ' {
             return (i, info, false, true);
         }
-        if json[i] == b'\\' {
+        if ch == b'\\' {
             info |= ESCAPED;
             i += 1;
             if i == json.len() {
@@ -805,10 +857,14 @@ mod tests {
         });
         assert_eq!(out, "{}");
         let mut out = String::new();
-        parse(json, UNCHECKED, |start: usize, end: usize, _: usize| -> i64 {
-            out.push_str(&frag(json, start, end));
-            return -1;
-        });
+        parse(
+            json,
+            UNCHECKED,
+            |start: usize, end: usize, _: usize| -> i64 {
+                out.push_str(&frag(json, start, end));
+                return -1;
+            },
+        );
         assert_eq!(out, "{}");
         ///////////////
         out.clear();
@@ -818,10 +874,14 @@ mod tests {
         });
         assert_eq!(out, "{");
         out.clear();
-        parse(json, UNCHECKED, |start: usize, end: usize, _: usize| -> i64 {
-            out.push_str(&frag(json, start, end));
-            return 0;
-        });
+        parse(
+            json,
+            UNCHECKED,
+            |start: usize, end: usize, _: usize| -> i64 {
+                out.push_str(&frag(json, start, end));
+                return 0;
+            },
+        );
         assert_eq!(out, "{");
         ///////////////
         out.clear();
@@ -834,13 +894,17 @@ mod tests {
         });
         assert_eq!(out, r#"{"hello""#);
         out.clear();
-        parse(json, UNCHECKED, |start: usize, end: usize, info: usize| -> i64 {
-            out.push_str(&frag(json, start, end));
-            if info & KEY == KEY {
-                return 0;
-            }
-            return 1;
-        });
+        parse(
+            json,
+            UNCHECKED,
+            |start: usize, end: usize, info: usize| -> i64 {
+                out.push_str(&frag(json, start, end));
+                if info & KEY == KEY {
+                    return 0;
+                }
+                return 1;
+            },
+        );
         assert_eq!(out, r#"{"hello""#);
         ///////////////
         out.clear();
@@ -853,13 +917,17 @@ mod tests {
         });
         assert_eq!(out, r#"{"hello":"#);
         out.clear();
-        parse(json, UNCHECKED, |start: usize, end: usize, info: usize| -> i64 {
-            out.push_str(&frag(json, start, end));
-            if info & COLON == COLON {
-                return 0;
-            }
-            return 1;
-        });
+        parse(
+            json,
+            UNCHECKED,
+            |start: usize, end: usize, info: usize| -> i64 {
+                out.push_str(&frag(json, start, end));
+                if info & COLON == COLON {
+                    return 0;
+                }
+                return 1;
+            },
+        );
         assert_eq!(out, r#"{"hello":"#);
         ///////////////
         out.clear();
@@ -875,16 +943,20 @@ mod tests {
         });
         assert_eq!(out, r#"{"hello":[],"#);
         out.clear();
-        parse(json, UNCHECKED, |start: usize, end: usize, info: usize| -> i64 {
-            out.push_str(&frag(json, start, end));
-            if info & (OPEN | ARRAY) == OPEN | ARRAY {
-                return -1;
-            }
-            if info & COMMA == COMMA {
-                return 0;
-            }
-            return 1;
-        });
+        parse(
+            json,
+            UNCHECKED,
+            |start: usize, end: usize, info: usize| -> i64 {
+                out.push_str(&frag(json, start, end));
+                if info & (OPEN | ARRAY) == OPEN | ARRAY {
+                    return -1;
+                }
+                if info & COMMA == COMMA {
+                    return 0;
+                }
+                return 1;
+            },
+        );
         assert_eq!(out, r#"{"hello":[],"#);
         ///////////////
         out.clear();
@@ -897,13 +969,17 @@ mod tests {
         });
         assert_eq!(out, r#"{"hello":[],"jello":[]}"#);
         out.clear();
-        parse(json, UNCHECKED, |start: usize, end: usize, info: usize| -> i64 {
-            out.push_str(&frag(json, start, end));
-            if info & (OPEN | ARRAY) == OPEN | ARRAY {
-                return -1;
-            }
-            return 1;
-        });
+        parse(
+            json,
+            UNCHECKED,
+            |start: usize, end: usize, info: usize| -> i64 {
+                out.push_str(&frag(json, start, end));
+                if info & (OPEN | ARRAY) == OPEN | ARRAY {
+                    return -1;
+                }
+                return 1;
+            },
+        );
         assert_eq!(out, r#"{"hello":[],"jello":[]}"#);
         ///////////////
         out.clear();
@@ -919,16 +995,20 @@ mod tests {
         });
         assert_eq!(out, r#"{"hello":[],"jello":[]}"#);
         out.clear();
-        parse(json, UNCHECKED, |start: usize, end: usize, info: usize| -> i64 {
-            out.push_str(&frag(json, start, end));
-            if info & (OPEN | ARRAY) == OPEN | ARRAY {
-                return -1;
-            }
-            if info & (CLOSE | OBJECT) == CLOSE | OBJECT {
-                return 0;
-            }
-            return 1;
-        });
+        parse(
+            json,
+            UNCHECKED,
+            |start: usize, end: usize, info: usize| -> i64 {
+                out.push_str(&frag(json, start, end));
+                if info & (OPEN | ARRAY) == OPEN | ARRAY {
+                    return -1;
+                }
+                if info & (CLOSE | OBJECT) == CLOSE | OBJECT {
+                    return 0;
+                }
+                return 1;
+            },
+        );
         assert_eq!(out, r#"{"hello":[],"jello":[]}"#);
         ///////////////
         out.clear();
@@ -1384,7 +1464,12 @@ mod tests {
         let mut total = 0;
         let start = std::time::Instant::now();
         while total < 100 * 1024 * 1024 {
-            parse(json, 0, |_: usize, _: usize, _: usize| -> i64 { -1 });
+            let ret = parse(json, 0, |_: usize, _: usize, _: usize| -> i64 {
+                -1
+            });
+            if ret <= 0 {
+                panic!("parse failed: {}", ret);
+            }
             total += json.len();
         }
         println!(
@@ -1409,11 +1494,15 @@ mod tests {
 
     #[test]
     fn test_unchecked() {
-        parse(EXAMPLE, UNCHECKED, |start: usize, end: usize, _: usize| -> i64 {
-            println!("{}", unsafe {
-                std::str::from_utf8_unchecked(&EXAMPLE[start..end])
-            });
-            1
-        });
+        parse(
+            EXAMPLE,
+            UNCHECKED,
+            |start: usize, end: usize, _: usize| -> i64 {
+                println!("{}", unsafe {
+                    std::str::from_utf8_unchecked(&EXAMPLE[start..end])
+                });
+                1
+            },
+        );
     }
 }
