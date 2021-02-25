@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 // Copyright 2021 Joshua J Baker. All rights reserved.
 // Use of this source code is governed by an MIT-style
 // license that can be found in the LICENSE file.
@@ -6,43 +8,45 @@
 // provides additional information about the data
 
 /// the data is a JSON String
-pub const STRING: usize = 1 << 1; 
+pub const STRING: usize = 1 << 1;
 /// the data is a JSON Number
-pub const NUMBER: usize = 1 << 2; 
+pub const NUMBER: usize = 1 << 2;
 /// the data is a JSON True
-pub const TRUE: usize = 1 << 3; 
+pub const TRUE: usize = 1 << 3;
 /// the data is a JSON False
 pub const FALSE: usize = 1 << 4;
-/// the data is a JSON NUll 
-pub const NULL: usize = 1 << 5; 
+/// the data is a JSON NUll
+pub const NULL: usize = 1 << 5;
 /// the data is a JSON Object (open or close character)
 pub const OBJECT: usize = 1 << 6;
-/// the data is a JSON Array (open or close character) 
-pub const ARRAY: usize = 1 << 7; 
+/// the data is a JSON Array (open or close character)
+pub const ARRAY: usize = 1 << 7;
 /// the data is a JSON comma character ','
-pub const COMMA: usize = 1 << 8; 
+pub const COMMA: usize = 1 << 8;
 /// the data is a JSON colon character ':'
-pub const COLON: usize = 1 << 9; 
+pub const COLON: usize = 1 << 9;
 /// the data is the start of the JSON document
 pub const START: usize = 1 << 10;
-/// the data is the end of the JSON document 
-pub const END: usize = 1 << 11; 
+/// the data is the end of the JSON document
+pub const END: usize = 1 << 11;
 /// the data is an open character (Object or Array, '{' or '[')
-pub const OPEN: usize = 1 << 12; 
+pub const OPEN: usize = 1 << 12;
 /// the data is an close character (Object or Array, '}' or ']')
 pub const CLOSE: usize = 1 << 13;
 /// the data is a JSON Object key
-pub const KEY: usize = 1 << 14; 
+pub const KEY: usize = 1 << 14;
 /// the data is a JSON Object or Array value
-pub const VALUE: usize = 1 << 15; 
+pub const VALUE: usize = 1 << 15;
 /// the data is a String with at least one escape character ('\')
-pub const ESCAPED: usize = 1 << 16; 
+pub const ESCAPED: usize = 1 << 16;
 /// the data is a signed Number (has a '-' prefix)
 pub const SIGN: usize = 1 << 17;
-/// the data is a Number has a dot (radix point) 
-pub const DOT: usize = 1 << 18; 
+/// the data is a Number has a dot (radix point)
+pub const DOT: usize = 1 << 18;
 /// the data is a Number in scientific notation (has 'E' or 'e')
-pub const E: usize = 1 << 19; 
+pub const E: usize = 1 << 19;
+
+pub const UNCHECKED: usize = 1 << 1;
 
 /// Parse JSON. The iter function is a callback that fires for every element in
 /// the JSON document. Elements include all values and tokens. The 'start' and
@@ -65,9 +69,9 @@ pub const E: usize = 1 << 19;
 /// stopped early then this value will be the position the parser was at when
 /// it stopped, otherwise the value will be equal the length of the original
 /// json document.
-/// 
+///
 /// The following example prints every JSON String Value in the document:
-/// 
+///
 /// ```
 /// fn main() {
 ///     let json = br#"
@@ -117,9 +121,8 @@ pub fn parse<F>(json: &[u8], opts: usize, iter: F) -> i64
 where
     F: FnMut(usize, usize, usize) -> i64,
 {
-    let _ = opts;
     let mut f = iter;
-    let (i, ok, _) = vdoc(json, 0, &mut f, false);
+    let (i, ok, _) = vdoc(json, 0, opts, &mut f, false);
     if !ok {
         i as i64 * -1
     } else {
@@ -129,7 +132,10 @@ where
 
 const CHWS: u8 = 1 << 1;
 const CHNUM: u8 = 1 << 2;
-const CHSTRTOK: u8 = 1 << 4;
+const CHSTRTOK: u8 = 1 << 3;
+const CHSQUASH: u8 = 1 << 4;
+const CHOPEN: u8 = 1 << 5;
+const CHCLOSE: u8 = 1 << 6;
 
 static CHTABLE: [u8; 256] = {
     let mut table = [0; 256];
@@ -184,6 +190,13 @@ static CHTABLE: [u8; 256] = {
     table[b'"' as usize] |= CHSTRTOK;
     table[b'\\' as usize] |= CHSTRTOK;
 
+
+    table[b'"' as usize] |= CHSQUASH;
+    table[b'{' as usize] |= CHSQUASH|CHOPEN;
+    table[b'[' as usize] |= CHSQUASH|CHOPEN;
+    table[b'}' as usize] |= CHSQUASH|CHCLOSE;
+    table[b']' as usize] |= CHSQUASH|CHCLOSE;
+
     table
 };
 
@@ -202,11 +215,11 @@ fn isstrtok(ch: u8) -> bool {
     CHTABLE[ch as usize] & CHSTRTOK == CHSTRTOK
 }
 
-fn vdoc<F>(json: &[u8], i: usize, f: &mut F, skip: bool) -> (usize, bool, bool)
+fn vdoc<F>(json: &[u8], i: usize, opts: usize, f: &mut F, skip: bool) -> (usize, bool, bool)
 where
     F: FnMut(usize, usize, usize) -> i64,
 {
-    let (mut i, ok, stop) = vany(json, i, START, f, skip);
+    let (mut i, ok, stop) = vany(json, i, opts, START, f, skip);
     if stop {
         return (i, ok, stop);
     }
@@ -220,9 +233,87 @@ where
     return (i, true, false);
 }
 
+// squash an object or array and return the next index after the '{' or '['.
+fn squash(json: &[u8], mut i: usize) -> usize {
+    // opening character has been already parsed
+    let mut depth = 1;
+    let mut ch: usize = 0;
+    'outer: loop {
+        'tok: loop {
+            while i + 8 < json.len() {
+                for _ in 0..8 {
+                    ch = unsafe { *json.get_unchecked(i) } as usize;
+                    if CHTABLE[ch]&CHSQUASH == CHSQUASH {
+                        break 'tok;
+                    }
+                    i += 1;
+                }
+            }
+            while i < json.len() {
+                ch = json[i] as usize;
+                if CHTABLE[ch]&CHSQUASH == CHSQUASH {    
+                    break 'tok;
+                }
+                i += 1;
+            }
+            break 'outer;
+        }
+        if ch as u8 == b'"' {
+            i += 1;
+            let s = i;
+            loop {
+                'quote: loop {
+                    while i + 8 < json.len() {
+                        for _ in 0..8 {
+                            if unsafe { *json.get_unchecked(i) } == b'"' {
+                                break 'quote;
+                            }
+                            i += 1;
+                        }
+                    }
+                    while i < json.len() {
+                        if json[i] == b'"' {
+                            break 'quote;
+                        }
+                        i += 1;
+                    }
+                    break 'outer;
+                }
+                // look for an escaped slash
+                if json[i-1] == b'\\' {
+                    let mut n = 0;
+                    let mut j = i - 2;
+                    while j > s-1  {
+                        if json[j] != b'\\' {
+                            break;
+                        }
+                        n += 1;
+                        j -= 1;
+                    }
+                    if n%2 == 0 {
+                        i += 1;
+                        continue;
+                    }
+                }
+                break;
+            }
+        } else if CHTABLE[ch]&CHOPEN == CHOPEN {
+            depth += 1;
+        } else if CHTABLE[ch]&CHCLOSE == CHCLOSE {
+            depth -= 1;
+            if depth == 0 {
+                return i + 1;
+            }
+        }
+        i += 1;
+    }
+    return i;
+}
+
 fn vany<F>(
     json: &[u8],
     mut i: usize,
+    opts: usize,
     mut dinfo: usize,
     f: &mut F,
     skip: bool,
@@ -257,12 +348,16 @@ where
                     oskip = true;
                 }
             }
-            let (i_, ok_, stop_) = vobject(json, i + 1, f, oskip);
-            i = i_;
-            ok = ok_;
-            stop = stop_;
-            if stop {
-                return (i, ok, stop);
+            if opts&UNCHECKED==UNCHECKED && oskip {
+                i = squash(json, i + 1);
+            } else {
+                let (i_, ok_, stop_) = vobject(json, i + 1, opts, f, oskip);
+                i = i_;
+                ok = ok_;
+                stop = stop_;
+                if stop {
+                    return (i, ok, stop);
+                }
             }
             if !skip {
                 if dinfo & START == START {
@@ -285,12 +380,16 @@ where
                     oskip = true;
                 }
             }
-            let (i_, ok_, stop_) = varray(json, i + 1, f, oskip);
-            i = i_;
-            ok = ok_;
-            stop = stop_;
-            if stop {
-                return (i, ok, stop);
+            if opts&UNCHECKED==UNCHECKED && oskip {
+                i = squash(json, i + 1);
+            } else {
+                let (i_, ok_, stop_) = varray(json, i + 1, opts, f, oskip);
+                i = i_;
+                ok = ok_;
+                stop = stop_;
+                if stop {
+                    return (i, ok, stop);
+                }
             }
             if !skip {
                 if dinfo & START == START {
@@ -346,7 +445,7 @@ where
     return (i, false, true);
 }
 
-fn vobject<F>(json: &[u8], mut i: usize, f: &mut F, skip: bool) -> (usize, bool, bool)
+fn vobject<F>(json: &[u8], mut i: usize, opts: usize, f: &mut F, skip: bool) -> (usize, bool, bool)
 where
     F: FnMut(usize, usize, usize) -> i64,
 {
@@ -389,7 +488,7 @@ where
                         return (i, true, true);
                     }
                 }
-                let (i_, ok_, stop_) = vany(json, i, VALUE, f, skip);
+                let (i_, ok_, stop_) = vany(json, i, opts, VALUE, f, skip);
                 i = i_;
                 ok = ok_;
                 stop = stop_;
@@ -430,7 +529,7 @@ where
     return (i, false, true);
 }
 
-fn varray<F>(json: &[u8], mut i: usize, f: &mut F, skip: bool) -> (usize, bool, bool)
+fn varray<F>(json: &[u8], mut i: usize, opts: usize, f: &mut F, skip: bool) -> (usize, bool, bool)
 where
     F: FnMut(usize, usize, usize) -> i64,
 {
@@ -449,7 +548,7 @@ where
             }
             let mut ok;
             let mut stop;
-            let (i_, ok_, stop_) = vany(json, i, VALUE, f, skip);
+            let (i_, ok_, stop_) = vany(json, i, opts, VALUE, f, skip);
             i = i_;
             ok = ok_;
             stop = stop_;
@@ -697,6 +796,7 @@ mod tests {
 
     #[test]
     fn iters() {
+        ///////////////
         let json = br#" { "hello" : [ 1, 2, 3 ], "jello" : [ 4, 5, 6 ] } "#;
         let mut out = String::new();
         parse(json, 0, |start: usize, end: usize, _: usize| -> i64 {
@@ -704,14 +804,26 @@ mod tests {
             return -1;
         });
         assert_eq!(out, "{}");
-
+        let mut out = String::new();
+        parse(json, UNCHECKED, |start: usize, end: usize, _: usize| -> i64 {
+            out.push_str(&frag(json, start, end));
+            return -1;
+        });
+        assert_eq!(out, "{}");
+        ///////////////
         out.clear();
         parse(json, 0, |start: usize, end: usize, _: usize| -> i64 {
             out.push_str(&frag(json, start, end));
             return 0;
         });
         assert_eq!(out, "{");
-
+        out.clear();
+        parse(json, UNCHECKED, |start: usize, end: usize, _: usize| -> i64 {
+            out.push_str(&frag(json, start, end));
+            return 0;
+        });
+        assert_eq!(out, "{");
+        ///////////////
         out.clear();
         parse(json, 0, |start: usize, end: usize, info: usize| -> i64 {
             out.push_str(&frag(json, start, end));
@@ -721,7 +833,16 @@ mod tests {
             return 1;
         });
         assert_eq!(out, r#"{"hello""#);
-
+        out.clear();
+        parse(json, UNCHECKED, |start: usize, end: usize, info: usize| -> i64 {
+            out.push_str(&frag(json, start, end));
+            if info & KEY == KEY {
+                return 0;
+            }
+            return 1;
+        });
+        assert_eq!(out, r#"{"hello""#);
+        ///////////////
         out.clear();
         parse(json, 0, |start: usize, end: usize, info: usize| -> i64 {
             out.push_str(&frag(json, start, end));
@@ -731,7 +852,16 @@ mod tests {
             return 1;
         });
         assert_eq!(out, r#"{"hello":"#);
-
+        out.clear();
+        parse(json, UNCHECKED, |start: usize, end: usize, info: usize| -> i64 {
+            out.push_str(&frag(json, start, end));
+            if info & COLON == COLON {
+                return 0;
+            }
+            return 1;
+        });
+        assert_eq!(out, r#"{"hello":"#);
+        ///////////////
         out.clear();
         parse(json, 0, |start: usize, end: usize, info: usize| -> i64 {
             out.push_str(&frag(json, start, end));
@@ -744,7 +874,19 @@ mod tests {
             return 1;
         });
         assert_eq!(out, r#"{"hello":[],"#);
-
+        out.clear();
+        parse(json, UNCHECKED, |start: usize, end: usize, info: usize| -> i64 {
+            out.push_str(&frag(json, start, end));
+            if info & (OPEN | ARRAY) == OPEN | ARRAY {
+                return -1;
+            }
+            if info & COMMA == COMMA {
+                return 0;
+            }
+            return 1;
+        });
+        assert_eq!(out, r#"{"hello":[],"#);
+        ///////////////
         out.clear();
         parse(json, 0, |start: usize, end: usize, info: usize| -> i64 {
             out.push_str(&frag(json, start, end));
@@ -754,7 +896,16 @@ mod tests {
             return 1;
         });
         assert_eq!(out, r#"{"hello":[],"jello":[]}"#);
-
+        out.clear();
+        parse(json, UNCHECKED, |start: usize, end: usize, info: usize| -> i64 {
+            out.push_str(&frag(json, start, end));
+            if info & (OPEN | ARRAY) == OPEN | ARRAY {
+                return -1;
+            }
+            return 1;
+        });
+        assert_eq!(out, r#"{"hello":[],"jello":[]}"#);
+        ///////////////
         out.clear();
         parse(json, 0, |start: usize, end: usize, info: usize| -> i64 {
             out.push_str(&frag(json, start, end));
@@ -767,7 +918,19 @@ mod tests {
             return 1;
         });
         assert_eq!(out, r#"{"hello":[],"jello":[]}"#);
-
+        out.clear();
+        parse(json, UNCHECKED, |start: usize, end: usize, info: usize| -> i64 {
+            out.push_str(&frag(json, start, end));
+            if info & (OPEN | ARRAY) == OPEN | ARRAY {
+                return -1;
+            }
+            if info & (CLOSE | OBJECT) == CLOSE | OBJECT {
+                return 0;
+            }
+            return 1;
+        });
+        assert_eq!(out, r#"{"hello":[],"jello":[]}"#);
+        ///////////////
         out.clear();
         parse(json, 0, |start: usize, end: usize, info: usize| -> i64 {
             if info & (OBJECT | START) == OBJECT | START {
@@ -1230,9 +1393,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_main() {
-        let json = br#"
+    const EXAMPLE: &[u8] = br#"
 	    {
 	      "name": {"first": "Tom", "last": "Anderson"},
 	      "age":37,
@@ -1246,11 +1407,12 @@ mod tests {
 	    }
 	   "#;
 
-        crate::parse(json, 0, |start: usize, end: usize, info: usize| -> i64 {
-            if info & (crate::STRING | crate::VALUE) == crate::STRING | crate::VALUE {
-                let el = String::from_utf8(json[start..end].to_vec()).unwrap();
-                println!("{}", el);
-            }
+    #[test]
+    fn test_unchecked() {
+        parse(EXAMPLE, UNCHECKED, |start: usize, end: usize, _: usize| -> i64 {
+            println!("{}", unsafe {
+                std::str::from_utf8_unchecked(&EXAMPLE[start..end])
+            });
             1
         });
     }
